@@ -174,6 +174,8 @@ def set_claim_and_navigate(claim_text: str):
     """Helper to pre-fill claim in Fact Checker from a news card."""
     st.session_state["fact_check_claim"] = claim_text
     st.session_state["active_nav"] = "Fact Checker"
+    st.session_state["nav_radio"] = "Fact Checker"
+    st.session_state["auto_run"] = True
 
 
 # ---------------------------------------------------------
@@ -239,7 +241,7 @@ if st.session_state["active_nav"] == "Latest News":
         news_df = fetch_latest_news(query=active_query, max_results=max_articles)
 
     if news_df.empty:
-        st.warning("⚠️ No recent news articles were found for this query. Try a different search term.")
+        st.warning("⚠️ No recent news articles were found for this query. If you are offline, please check your network connection, or try a different search term.")
     else:
         st.write(f"Showing **{len(news_df)}** recent articles:")
 
@@ -284,16 +286,19 @@ elif st.session_state["active_nav"] == "Fact Checker":
     with sample_col1:
         if st.button("🎬 Moon landing was staged on movie set", use_container_width=True):
             st.session_state["fact_check_claim"] = "The Apollo 11 moon landing was faked on a movie set"
+            st.session_state["auto_run"] = True
             st.rerun()
             
     with sample_col2:
         if st.button("🔭 JWST captured early galaxies", use_container_width=True):
             st.session_state["fact_check_claim"] = "James Webb Space Telescope observed earliest known galaxies in deep space"
+            st.session_state["auto_run"] = True
             st.rerun()
             
     with sample_col3:
         if st.button("⚡ Electric cars catch fire more than gas cars", use_container_width=True):
             st.session_state["fact_check_claim"] = "Electric vehicles catch fire more often than gasoline powered cars"
+            st.session_state["auto_run"] = True
             st.rerun()
 
     # Input Form
@@ -338,6 +343,8 @@ elif st.session_state["active_nav"] == "Fact Checker":
             if result.get("status") == "error":
                 st.error(result.get("message"))
             else:
+                if result.get("status") == "warning":
+                    st.warning(f"⚠️ {result.get('message')}")
                 # -------------------------------------------------
                 # 1. Main Assessment Banner (Requirement 5)
                 # -------------------------------------------------

@@ -8,6 +8,7 @@ and determines an evidence-based assessment.
 
 import re
 from typing import Dict, List, Any
+from urllib.parse import urlparse
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -64,23 +65,22 @@ CONTRADICTION_PATTERNS = [
 SUPPORT_PATTERNS = [
     r"\bconfirm(ed|s|ing)?\b",
     r"\bverif(ied|ies|ying)\b",
+    r"\bcorroborat(ed|es|ing)?\b",
+    r"\bsubstantiat(ed|es|ing)?\b",
     r"\bofficially announced\b",
     r"\breports confirm\b",
     r"\bevidence shows\b",
     r"\bproved that\b",
     r"\bdocumented that\b",
-    r"\btrue that\b",
+    r"\bproven true\b",
     r"\bstudies show\b",
     r"\bdata indicates\b",
     r"\bfound that\b",
-    r"\bannounc(ed|es|ing)?\b",
-    r"\breleas(ed|es|ing)?\b",
-    r"\bcaptur(ed|es|ing)?\b",
     r"\bdiscover(ed|s|ing)?\b",
     r"\bdemonstrat(ed|es|ing)?\b",
-    r"\bobserv(ed|es|ing)?\b",
-    r"\breport(s|ed|ing)? that\b",
-    r"\baccording to\b",
+    r"\bconcluded that\b",
+    r"\baccurate(ly)?\b",
+    r"(?<!not\s)(?<!un)\btrue that\b",
 ]
 
 
@@ -107,6 +107,31 @@ def extract_search_keywords(claim: str, max_words: int = 6) -> str:
     return " ".join(meaningful[:max_words])
 
 
+def is_publisher_check_relevant(claim: str, url: str, title: str, text: str) -> bool:
+    """
+    Ensures a publisher fact-check article is actually addressing the submitted claim,
+    not an unrelated topic or a general homepage/search directory.
+    """
+    parsed = urlparse(url)
+    clean_path = parsed.path.strip("/")
+    if clean_path in ("", "free-fact-checker", "search", "fact-checks", "category", "news"):
+        return False
+        
+    claim_words = [w.lower() for w in re.findall(r"\b[a-zA-Z0-9]{3,}\b", claim)]
+    stop_words = {
+        "the", "and", "for", "that", "this", "with", "from", "are", "was", "were", 
+        "been", "have", "has", "claim", "claims", "news", "what", "which", "will"
+    }
+    meaningful = [w for w in claim_words if w not in stop_words]
+    if not meaningful:
+        return True
+        
+    target_content = f"{parsed.path} {title} {text[:400]}".lower()
+    matches = sum(1 for w in meaningful if w in target_content)
+    threshold = min(2, len(meaningful))
+    return matches >= threshold
+
+
 def identify_publisher_fact_check(url: str, title: str, text: str) -> Dict[str, Any] | None:
     """
     Checks if an article comes from an established fact-checking organization
@@ -130,24 +155,29 @@ def identify_publisher_fact_check(url: str, title: str, text: str) -> Dict[str, 
         else:
             return None
 
-    # Detect rating words in headline and initial text
+    # Detect rating words in headline and initial text with word boundaries
     headline_and_intro = f"{title}. {text[:500]}".lower()
     
     detected_rating = "Investigative Fact Check"
     is_refutation = False
     is_affirmation = False
     
-    if any(k in headline_and_intro for k in ["pants on fire", "false", "debunked", "hoax", "fake", "incorrect"]):
+    refutation_regex = r"\b(pants on fire|false|debunk(ed|s|ing)?|hoax|fake|incorrect|not true|untrue|disproven|refuted|fabricated|no evidence)\b"
+    misleading_regex = r"\b(misleading|mostly false|partly false|partially false|missing context|out of context|half true|unsupported)\b"
+    unproven_regex = r"\b(unproven|unverified|inconclusive)\b"
+    affirmation_regex = r"\b(rated true|mostly true|verified|correct|accurate)\b|(?<!not\s)(?<!un)\btrue\b"
+
+    if re.search(refutation_regex, headline_and_intro):
         detected_rating = "Rated FALSE / Debunked"
         is_refutation = True
-    elif any(k in headline_and_intro for k in ["misleading", "mostly false", "partly false", "missing context", "out of context"]):
+    elif re.search(misleading_regex, headline_and_intro):
         detected_rating = "Rated MISLEADING / Partial False"
         is_refutation = True
-    elif any(k in headline_and_intro for k in ["mostly true", "correct", "verified", "accurate", "true"]):
+    elif re.search(unproven_regex, headline_and_intro):
+        detected_rating = "Rated UNPROVEN"
+    elif re.search(affirmation_regex, headline_and_intro):
         detected_rating = "Rated TRUE / Verified"
         is_affirmation = True
-    elif "unproven" in headline_and_intro:
-        detected_rating = "Rated UNPROVEN"
 
     return {
         "publisher": publisher_name,
@@ -276,9 +306,9 @@ def analyze_claim(claim: str, max_sources: int = 5) -> Dict[str, Any]:
         fetch_result = fetch_article_text(url, fallback_snippet=snippet)
         full_text = fetch_result["text"]
         
-        # Check if source is a known fact check publisher
+        # Check if source is a known fact check publisher AND relevant to this claim
         fact_check = identify_publisher_fact_check(url, title, full_text)
-        if fact_check:
+        if fact_check and is_publisher_check_relevant(claim, url, title, full_text):
             publisher_fact_checks.append(fact_check)
             
         # Extract candidate sentences
@@ -320,7 +350,6 @@ def analyze_claim(claim: str, max_sources: int = 5) -> Dict[str, Any]:
         vectorizer = TfidfVectorizer(
             stop_words="english",
             ngram_range=(1, 2),
-            max_df=0.95,
             sublinear_tf=True
         )
         tfidf_matrix = vectorizer.fit_transform(corpus)
@@ -363,14 +392,15 @@ def analyze_claim(claim: str, max_sources: int = 5) -> Dict[str, Any]:
         # Detect support patterns
         has_support = any(re.search(pat, sent_lower) for pat in SUPPORT_PATTERNS)
         
-        # Check if the source itself is an explicit fact-check article debunking the claim
+        # Check if the source headline itself explicitly signals a debunking/false report
         title_lower = item["title"].lower()
-        if any(w in title_lower for w in ["false", "debunk", "hoax", "fact check", "fake", "misleading"]):
+        if any(w in title_lower for w in ["false", "debunk", "hoax", "fake", "misleading", "incorrect", "untrue", "disproven"]):
             has_contradiction = True
 
-        if has_contradiction and not has_support:
+        # Contradiction stance takes precedence when refutation markers exist
+        if has_contradiction:
             contradicting_evidence.append(item)
-        elif has_support and not has_contradiction:
+        elif has_support:
             supporting_evidence.append(item)
 
     # Limit evidence items to top 5 per stance
@@ -385,7 +415,22 @@ def analyze_claim(claim: str, max_sources: int = 5) -> Dict[str, Any]:
     num_supp = len(supporting_evidence) + (publisher_affirmations * 2)
     total_relevant = len(scored_sentences)
 
-    if publisher_refutations > 0 or (num_contra >= 2 and num_supp == 0) or (num_contra >= 3 and num_contra > num_supp * 1.5):
+    # If no relevant quotes were found and no verified publisher fact-checks addressed the claim
+    if total_relevant == 0 and not (publisher_refutations or publisher_affirmations):
+        assessment = "Insufficient evidence"
+        details = (
+            "The available search results do not provide enough conclusive, explicit evidence "
+            "to reliably confirm or refute this claim at this time."
+        )
+        badge_type = "insufficient"
+    elif publisher_refutations > 0 and publisher_affirmations > 0:
+        assessment = "Conflicting evidence"
+        details = (
+            "Online sources present divergent statements. Some reports affirm aspects of the claim, "
+            "while others dispute, question, or contradict it."
+        )
+        badge_type = "conflicting"
+    elif publisher_refutations > 0 or (num_contra >= 2 and num_supp == 0) or (num_contra >= 3 and num_contra > num_supp * 1.5):
         assessment = "Contradicted by available evidence"
         details = (
             "Multiple reliable sources or professional fact-checkers explicitly refute, "

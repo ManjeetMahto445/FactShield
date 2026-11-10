@@ -17,6 +17,11 @@ def clean_text(text: str) -> str:
     """
     if not text:
         return ""
+    if not isinstance(text, str):
+        text = str(text)
+    # Remove unicode replacement char and non-printable control characters
+    text = text.replace("\ufffd", " ")
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", "", text)
     # Normalize unicode quotation marks and dashes
     text = text.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
     text = text.replace("—", " - ").replace("–", " - ")

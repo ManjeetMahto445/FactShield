@@ -63,6 +63,10 @@ def fetch_article_text(url: str, fallback_snippet: str = "") -> dict:
                 "error": f"HTTP {response.status_code}"
             }
             
+        # Ensure proper character decoding (avoid ISO-8859-1 mojibake)
+        if response.encoding is None or response.encoding.lower() == "iso-8859-1":
+            response.encoding = response.apparent_encoding or "utf-8"
+
         # Parse HTML safely
         soup = BeautifulSoup(response.text, "html.parser")
         
