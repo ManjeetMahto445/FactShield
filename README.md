@@ -1,6 +1,6 @@
 # 🛡️ FactShield — Live News Explorer and Misinformation Checker
 
-> **College Final Year / Capstone Engineering Project**  
+> **collage 2nd Year / Capstone Engineering Project**  
 > An open-source, evidence-based web application that aggregates real-time news and investigates claims using multi-source web evidence and text similarity algorithms without relying on paid AI models or commercial APIs.
 
 ---
